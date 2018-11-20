@@ -53,7 +53,7 @@ Then setups the sanic-jwt in the ```Initialize``` using the provided ```authenti
 And finally adds the password management routes with ```add_manage_password_routes```
 
 ## Installation
-```pip install -e git+http://github.com/Garito/yAuth#egg=yAuth```
+```pip install yAuth```
 
 ## Help
 Feel free to help if you think something is weird or incomplete by submiting a pull request

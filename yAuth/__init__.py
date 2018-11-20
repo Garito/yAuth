@@ -1,18 +1,19 @@
 from os import urandom
 from binascii import hexlify
 from hashlib import pbkdf2_hmac
-
 from secrets import compare_digest
+from functools import wraps
+from typing import Callable
 
 from marshmallow import fields
 from marshmallow.validate import Length
 
-from sanic.exceptions import Unauthorized
-
-from ySanic import yBlueprint, response
+from sanic.request import Request
+from sanic.exceptions import Unauthorized, InvalidUsage
 
 from sanic_jwt.exceptions import AuthenticationFailed
 
+from ySanic import yBlueprint, response
 from yModel import Schema
 
 def generate_password_hash(password, salt = None, iterations = 50000):
@@ -62,20 +63,55 @@ async def retrieve_user(request, payload, *args, **kwargs):
 
   return None
 
+async def actor_model(request):
+  payload = request.app.auth.extract_payload(request, verify = False)
+  user = await request.app.auth.retrieve_user(request, payload)
+  if user:
+    model = request.app.models.User(request.app.table)
+    model.load(user)
+  else:
+    model = None
+
+  return model
+
 def get_actor(func):
   async def decorator(*args, **kwargs):
     request = args[1]
-    payload = request.app.auth.extract_payload(request, verify=False)
-    user = await request.app.auth.retrieve_user(request, payload)
     newargs = list(args)
-    if user:
-      model = request.app.models.User(request.app.table)
-      model.load(user)
-      newargs.append(model)
-    else:
-      newargs.append(None)
+    newargs.append(await actor_model(request))
+
     return await func(*newargs, **kwargs)
 
+  return decorator
+
+def allowed(condition):
+  def decorator(func):
+    if not hasattr(func, "__decorators__"):
+      func.__decorators__ = {}
+    func.__decorators__["allowed"] = {"condition": condition}
+
+    @wraps(func)
+    async def decorated(*args, **kwargs):
+      request = None
+      for arg in args:
+        if isinstance(arg, Request):
+          request = arg
+          break
+      if request is None:
+        raise InvalidUsage(func.__name__)
+
+      actor = await actor_model(request)
+
+      if isinstance(condition, Callable):
+        if condition(args[0], actor):
+          return await func(*args, **kwargs)
+      else:
+        if hasattr(actor, "roles") and any(map(lambda rol: rol in condition, actor.roles)):
+          return await func(*args, **kwargs)
+
+      raise Unauthorized("Not enought privileges")
+
+    return decorated
   return decorator
 
 def add_manage_password_routes():
