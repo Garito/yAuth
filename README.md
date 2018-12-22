@@ -1,56 +1,10 @@
 # yAuth
-yAuth is an integration of [yModel](https://github.com/Garito/yModel), [ySanic](https://github.com/Garito/ySanic) and [sanic-jwt](https://github.com/ahopkins/sanic-jwt)
+yAuth is an integration of [yModel](https://github.com/Garito/yModel), [ySanic](https://github.com/Garito/ySanic) and [pyJWT](https://github.com/jpadilla/pyjwt)
 
-It has the authenticate and the retrieve_user necessary to log in your users
+It defines models and methods for JWT token authentication as the Authentication header and a Bearer token
 
-It has a password generator and checker inspired on the flask one (better not reinvent the wheel with security)
-
-In addition to that, it has a decorator to get the user that makes the query (the actor) and the routes to manage the password and to reset it
-
-# Example
-```python
-from sanic_mongo import Mongo
-
-from sanic_jwt import Initialize
-
-from ySanic import MongoySanic
-
-from yAuth import authenticate, retrieve_user
-
-from tests.app import models
-from tests.app.config import Config
-
-def create_app():
-  app = MongoySanic(models = models)
-  app.config.from_object(Config)
-
-  Mongo.SetConfig(app, test = app.config.get("MONGO_URI"))
-  Mongo(app)
-
-  Initialize(app, authenticate = authenticate, retrieve_user = retrieve_user)
-  app.blueprint(add_manage_password_routes())
-
-  app.register_middleware(app.set_table, "request")
-
-  if app.config.get("DEBUG", False):
-    app.register_middleware(app.allow_origin, "response")
-
-  return app
-
-if __name__ == "__main__":
-  app = create_app()
-  app.run(host = app.config.get("HOST", "localhost"), port = app.config.get("PORT", 8000))
-```
-
-As a normal patter for sanic, the example shows a create_app function that setups the ySanic (yMongoSanic, the mongo sanic version, in this case)
-
-Creates the object and configures it
-
-Setups the MongoClient (the async Motor version in this case)
-
-Then setups the sanic-jwt in the ```Initialize``` using the provided ```authenticate``` and ```retrieve_user```
-
-And finally adds the password management routes with ```add_manage_password_routes```
+## Example
+Check the application defined in the test folder
 
 ## Installation
 ```pip install yAuth```
