@@ -2,19 +2,26 @@ from os import urandom
 from binascii import hexlify
 from hashlib import pbkdf2_hmac
 from secrets import compare_digest
+
 from functools import wraps
+from datetime import datetime, timedelta
+
 from typing import Callable
+from asyncio import iscoroutinefunction
+
+from bson import ObjectId
+
+import jwt
 
 from marshmallow import fields
-from marshmallow.validate import Length
+from marshmallow.exceptions import ValidationError
 
-from sanic.request import Request
-from sanic.exceptions import Unauthorized, InvalidUsage
+from sanic.exceptions import Unauthorized
 
-from sanic_jwt.exceptions import AuthenticationFailed
+from yModel import Schema, OkSchema, OkDictResult, produces, consumes, can_crash
+from yModel.mongo import MongoSchema
 
-from ySanic import yBlueprint, response
-from yModel import Schema
+from ySanic import notaroute
 
 def generate_password_hash(password, salt = None, iterations = 50000):
   salt = hexlify(urandom(8)) if salt is None else str.encode(salt)
@@ -28,61 +35,11 @@ def check_password_hash(hashed, password):
   test = generate_password_hash(password, salt)
   return compare_digest(test, hashed)
 
-class Auth(Schema):
-  email = fields.Email(required = True)
-  password = fields.Str(required = True, validate = [Length(min = 6)])
+class InvalidRoute(Exception):
+  pass
 
-  def authenticates(self, password):
-    return check_password_hash(password, self.get_data()["password"])
-
-  async def exists(self):
-    return await self.table.find_one({"type": "User", "email": self.get_data()["email"]})
-
-async def authenticate(request, *args, **kwargs):
-  model = Auth(request.app.table)
-  model.load(request.json)
-  if model.get_errors():
-    raise AuthenticationFailed("Authentication has failed")
-
-  user = await model.exists()
-  if not user or not model.authenticates(user["password"]):
-    raise AuthenticationFailed("Authentication has failed")
-
-  return user
-
-async def retrieve_user(request, payload, *args, **kwargs):
-  if payload and request.app.config["SANIC_JWT_USER_ID"] in payload:
-    user_id = payload[request.app.config["SANIC_JWT_USER_ID"]]
-    if user_id:
-      model = request.app.models.User(request.app.table, exclude = ("password",))
-      await model.get(**{request.app.config["SANIC_JWT_USER_ID"]: user_id})
-      if hasattr(model, "post_retrieve_user"):
-        model.post_retrieve_user(request, payload, *args, **kwargs)
-
-      return model.to_plain_dict()
-
-  return None
-
-async def actor_model(request):
-  payload = request.app.auth.extract_payload(request, verify = False)
-  user = await request.app.auth.retrieve_user(request, payload)
-  if user:
-    model = request.app.models.User(request.app.table)
-    model.load(user)
-  else:
-    model = None
-
-  return model
-
-def get_actor(func):
-  async def decorator(*args, **kwargs):
-    request = args[1]
-    newargs = list(args)
-    newargs.append(await actor_model(request))
-
-    return await func(*newargs, **kwargs)
-
-  return decorator
+class PermissionException(Exception):
+  pass
 
 def allowed(condition):
   def decorator(func):
@@ -94,16 +51,19 @@ def allowed(condition):
     async def decorated(*args, **kwargs):
       request = None
       for arg in args:
-        if isinstance(arg, Request):
+        if hasattr(arg, "app") and hasattr(arg.app, "models"):
           request = arg
           break
-      if request is None:
-        raise InvalidUsage(func.__name__)
 
-      actor = await actor_model(request)
+      if request is None:
+        raise InvalidRoute(func.__name__)
+
+      authModel = yAuth()
+      actor = await authModel._actor(request)
 
       if isinstance(condition, Callable):
-        if condition(args[0], actor):
+        is_allowed = await condition(args, kwargs, actor) if iscoroutinefunction(condition) else condition(args, kwargs, actor)
+        if is_allowed:
           return await func(*args, **kwargs)
       else:
         if hasattr(actor, "roles") and any(map(lambda rol: rol in condition, actor.roles)):
@@ -114,36 +74,110 @@ def allowed(condition):
     return decorated
   return decorator
 
-def add_manage_password_routes():
-  bp = yBlueprint('manage_password')
+def permission(permission):
+  def decorator(func):
+    if not hasattr(func, "__decorators__"):
+      func.__decorators__ = {}
+    func.__decorators__["permission"] = permission
 
-  @bp.options("/<slug>/change_password")
-  def change_password_options(request, *args, **kwargs):
-    return response.text("", status = 204)
+    @wraps(func)
+    async def decorated(*args, **kwargs):
+      request = None
+      for arg in args:
+        if hasattr(arg, "app") and hasattr(arg.app, "models"):
+          request = arg
+          break
 
-  @bp.post("/<slug>/change_password")
-  @bp.can_crash(Unauthorized, code = 401)
-  @bp.produces()
-  async def change_password(request, slug, *args, **kwargs):
-    model = request.app.models.User(request.app.table)
-    await model.get(slug = slug)
-    await model.change_password(request, *args, **kwargs)
+      if request is None:
+        raise InvalidRoute(func.__name__)
 
-  @bp.options("/reset_password")
-  def reset_password_options(request, *args, **kwargs):
-    return response.text("", status = 204)
+      authModel = yAuth()
+      actor = await authModel._actor(request)
 
-  @bp.post("/reset_password")
-  async def reset_password(request):
-    model = request.app.models.ResetPasswordRequest(request.app.table)
-    model.load(request.json)
-    user = request.app.models.User(request.app.table)
+      parts = permission.split(".")
+      parts.reverse()
+      perm = request.app.permissions
+      while parts:
+        perm = perm[parts[-1]]
+        parts.pop()
+
+      if not perm:
+        raise PermissionException("{} doesn't exists".format(permission))
+
+      if any(map(lambda role: role in perm, actor.roles)):
+        return await func(*args, **kwargs)
+      else:
+        raise Unauthorized("Not enought privileges")
+
+    return decorated
+  return decorator
+
+class AuthToken(Schema):
+  access_token = fields.Str()
+
+  @classmethod
+  def get_bearer(cls, headers, key = "Authorization", prefix = "Bearer"):
+    return {"access_token": headers[key].replace("{} ".format(prefix), "")} if key in headers else None
+
+  def generate(self, payload, secret, exp = 30, algo = "HS256"):
+    if "exp" not in payload:
+      payload["exp"] = datetime.utcnow() + timedelta(minutes = exp)
+    self.__data__["access_token"] = jwt.encode(payload, secret, algo).decode()
+
+  def verify(self, secret, algos = None):
+    if algos is None:
+      algos = ["HS256"]
+
     try:
-      await user.get(email = model.email)
-      await model.create()
-      request.app.notify("reset_password", {"user": user.get_data(), "data": model.get_data()})
-    except Exception as e:
-      request.app.log.info(e)
-    return response.json({"ok": True})
+      if self.get_data():
+        payload = jwt.decode(self.access_token, secret, algorithms = algos)
+        return payload
+      else:
+        return False
+    except (jwt.DecodeError, jwt.ExpiredSignatureError):
+      return False
 
-  return bp
+class Auth(MongoSchema):
+  email = fields.Email(required = True, label = "Email")
+  password = fields.Str(required = True, label = "Password", input_type = "password")
+
+class yAuth():
+  @can_crash(ValidationError, code = 400, description = "Returns 400 is the login data can't be validated")
+  @can_crash(Unauthorized, code = 401, description = "Returns Unauthorized if can't authorize")
+  @produces(AuthToken, description = "Grants the user's access by returning a JWT token")
+  @consumes("Auth")
+  async def auth(self, request, model):
+    user = await request.app.models.User.exists(self.table, model.email, True)
+
+    if user and check_password_hash(user.password, model.password):
+      token = AuthToken()
+      token.generate({"user_id": str(user._id)}, request.app.config["JWT_SECRET"])
+      return token.to_plain_dict()
+    else:
+      raise Unauthorized("Authentication has failed")
+
+  @can_crash(Unauthorized, code = 401, description = "Returns Unauthorized if can't verify")
+  @produces(OkSchema, description = "Verifies the user auth token")
+  @allowed(["user"])
+  async def verify(self, request):
+    pass
+
+  @notaroute
+  @can_crash(Unauthorized, code = 401, renderer = lambda model: None)
+  @produces("User", description = "")
+  @consumes(AuthToken, from_ = "headers", getter = AuthToken.get_bearer)
+  async def _actor(self, request, model):
+    payload = model.verify(request.app.config["JWT_SECRET"])
+    if payload:
+      model = request.app.models.User(request.app.table, exclude = ("password",))
+      await model.get(_id = ObjectId(payload["user_id"]))
+      return model
+    
+    raise Unauthorized("No actor")
+
+  @can_crash(Unauthorized, code = 401, description = "Returns Unauthorized if the token is invalid")
+  @produces(OkDictResult, as_ = "result", description = "Returns the user data")
+  @allowed(["user"])
+  async def get_actor(self, request):
+    actor = await self._actor(request)
+    return actor.to_plain_dict()

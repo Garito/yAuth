@@ -6,7 +6,7 @@ def readme():
 
 setup(
   name = "yAuth",
-  version = "0.0.1",
+  version = "0.1.0",
   description = "sanic-jwt extensions for yRest",
   long_description = readme(),
   long_description_content_type='text/markdown',
@@ -26,7 +26,7 @@ setup(
   packages = find_packages(),
   python_requires=">=3.6",
   install_requires = [
-    "sanic-jwt",
+    "pyJWT",
     "ySanic",
     "yModel"
   ],

@@ -1,5 +1,13 @@
 # yAuth Change Log
 ## 0.1.1
+### Drop sanic-jwt dependency
+In the process of introspecting ySanic and yModels, the realization that sanic-jwt is a huge flexible solution for a lot of use cases but too much for the need of JWT token authentication was pretty evident
+
+The solution has been implemented with a sanic-jwt dependency pyJWT and yModels as should be obvious
+
+Could be an oversimplified solution but is lean and doesn't add more complexity
+
+### Allowed decorator
 allowed decorator allow to define the security requirements of an endpoint
 
 It has two forms:
