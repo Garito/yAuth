@@ -7,7 +7,7 @@ def readme():
 setup(
   name = "yAuth",
   version = "0.1.0",
-  description = "sanic-jwt extensions for yRest",
+  description = "pyJWT extensions for yRest",
   long_description = readme(),
   long_description_content_type='text/markdown',
   classifiers = [
