@@ -112,11 +112,14 @@ def allowed(condition):
 #     return decorated
 #   return decorator
 
-def permission(permission = None):
+def permission(permission = None, default = None):
+  if default is None:
+    default = []
+
   def decorator(func):
     if not hasattr(func, "__decorators__"):
       func.__decorators__ = {}
-    func.__decorators__["permission"] = permission
+    func.__decorators__["permission"] = {"name": permission, "default": default}
 
     @wraps(func)
     async def decorated(*args, **kwargs):
@@ -129,10 +132,10 @@ def permission(permission = None):
       if request is None:
         raise InvalidRoute(func.__qualname__)
 
-      if func.__decorators__["permission"] is None:
+      if func.__decorators__["permission"]["name"] is None:
         permission = "call" if func.__name__ == '__call__' else func.__name__
       else:
-        permission = func.__decorators__["permission"]
+        permission = func.__decorators__["permission"]["name"]
 
       permRepo = await args[0].ancestors(request.app.models, check = lambda x: hasattr(x, "permissions") and x.permissions)
       perm = await permRepo.get_permission(func.__qualname__.split(".")[0], permission)
