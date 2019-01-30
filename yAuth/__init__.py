@@ -74,7 +74,45 @@ def allowed(condition):
     return decorated
   return decorator
 
-def permission(permission):
+# def permission(permission):
+#   def decorator(func):
+#     if not hasattr(func, "__decorators__"):
+#       func.__decorators__ = {}
+#     func.__decorators__["permission"] = permission
+
+#     @wraps(func)
+#     async def decorated(*args, **kwargs):
+#       request = None
+#       for arg in args:
+#         if hasattr(arg, "app") and hasattr(arg.app, "models"):
+#           request = arg
+#           break
+
+#       if request is None:
+#         raise InvalidRoute(func.__name__)
+
+#       authModel = yAuth()
+#       actor = await authModel._actor(request)
+
+#       parts = permission.split(".")
+#       parts.reverse()
+#       perm = request.app.permissions
+#       while parts:
+#         perm = perm[parts[-1]]
+#         parts.pop()
+
+#       if not perm:
+#         raise PermissionException("{} doesn't exists".format(permission))
+
+#       if any(map(lambda role: role in perm, actor.roles)):
+#         return await func(*args, **kwargs)
+#       else:
+#         raise Unauthorized("Not enought privileges")
+
+#     return decorated
+#   return decorator
+
+def permission(permission = None):
   def decorator(func):
     if not hasattr(func, "__decorators__"):
       func.__decorators__ = {}
@@ -89,25 +127,37 @@ def permission(permission):
           break
 
       if request is None:
-        raise InvalidRoute(func.__name__)
+        raise InvalidRoute(func.__qualname__)
 
-      authModel = yAuth()
-      actor = await authModel._actor(request)
-
-      parts = permission.split(".")
-      parts.reverse()
-      perm = request.app.permissions
-      while parts:
-        perm = perm[parts[-1]]
-        parts.pop()
-
-      if not perm:
-        raise PermissionException("{} doesn't exists".format(permission))
-
-      if any(map(lambda role: role in perm, actor.roles)):
-        return await func(*args, **kwargs)
+      if func.__decorators__["permission"] is None:
+        permission = "call" if func.__name__ == '__call__' else func.__name__
       else:
-        raise Unauthorized("Not enought privileges")
+        permission = func.__decorators__["permission"]
+
+      permRepo = await args[0].ancestors(request.app.models, check = lambda x: hasattr(x, "permissions") and x.permissions)
+      perm = await permRepo.get_permission(func.__qualname__.split(".")[0], permission)
+
+      can = False
+      if perm:
+        if perm.roles:
+          actor = await yAuth()._actor(request)
+          if actor:
+            for rol in perm.roles:
+              if rol in actor.roles:
+                can = True
+                break
+              else:
+                checker = getattr(actor, "is_{}".format(rol.lower()))
+                if checker and checker(args[0]):
+                  can = True
+                  break
+        else:
+          can = True
+
+      if can:      
+        return await func(*args, **kwargs)
+      
+      raise Unauthorized("Not enought privileges") 
 
     return decorated
   return decorator
