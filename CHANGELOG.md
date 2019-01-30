@@ -16,3 +16,4 @@ It has two forms:
 ### Permission decorator
 Allow to define the permissions for the member
 It can be empty so the permission will be ```<Model>/<member>```
+It is possible to define default roles for the permission
