@@ -144,16 +144,15 @@ def permission(permission = None, default = None):
       if perm:
         if perm.roles:
           actor = await yAuth()._actor(request)
-          if actor:
-            for rol in perm.roles:
-              if rol in actor.roles:
+          for rol in perm.roles:
+            if actor and rol in actor.roles:
+              can = True
+              break
+            else:
+              checker = getattr(request.app.models.User, "is_{}".format(rol.lower()), None)
+              if checker and checker(actor, args[0], request):
                 can = True
                 break
-              else:
-                checker = getattr(actor, "is_{}".format(rol.lower()))
-                if checker and checker(args[0]):
-                  can = True
-                  break
         else:
           can = True
 
