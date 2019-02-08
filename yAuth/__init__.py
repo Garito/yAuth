@@ -112,7 +112,7 @@ def allowed(condition):
 #     return decorated
 #   return decorator
 
-def permission(permission = None, default = None):
+def permission(permission = None, default = None, description = None):
   if default is None:
     default = []
 
@@ -120,6 +120,8 @@ def permission(permission = None, default = None):
     if not hasattr(func, "__decorators__"):
       func.__decorators__ = {}
     func.__decorators__["permission"] = {"name": permission, "default": default}
+    if description is not None:
+      func.__decorators__["permission"]["description"] = description
 
     @wraps(func)
     async def decorated(*args, **kwargs):
@@ -145,14 +147,16 @@ def permission(permission = None, default = None):
         if perm.roles:
           actor = await yAuth()._actor(request)
           for rol in perm.roles:
-            if actor and rol in actor.roles:
+            if actor and (rol in actor.roles or "{}@{}".format(rol, args[0].get_url()) in actor.roles):
               can = True
               break
             else:
               checker = getattr(request.app.models.User, "is_{}".format(rol.lower()), None)
-              if checker and checker(actor, args[0], request):
-                can = True
-                break
+              if checker:
+                check = await checker(actor, args[0], request) if iscoroutinefunction(checker) else checker(actor, args[0], request)
+                if check:
+                  can = True
+                  break
         else:
           can = True
 
@@ -200,7 +204,6 @@ class yAuth():
   @consumes("Auth")
   async def auth(self, request, model):
     user = await request.app.models.User.exists(self.table, model.email, True)
-
     if user and check_password_hash(user.password, model.password):
       token = AuthToken()
       token.generate({"user_id": str(user._id)}, request.app.config["JWT_SECRET"])
