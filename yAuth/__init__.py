@@ -74,44 +74,6 @@ def allowed(condition):
     return decorated
   return decorator
 
-# def permission(permission):
-#   def decorator(func):
-#     if not hasattr(func, "__decorators__"):
-#       func.__decorators__ = {}
-#     func.__decorators__["permission"] = permission
-
-#     @wraps(func)
-#     async def decorated(*args, **kwargs):
-#       request = None
-#       for arg in args:
-#         if hasattr(arg, "app") and hasattr(arg.app, "models"):
-#           request = arg
-#           break
-
-#       if request is None:
-#         raise InvalidRoute(func.__name__)
-
-#       authModel = yAuth()
-#       actor = await authModel._actor(request)
-
-#       parts = permission.split(".")
-#       parts.reverse()
-#       perm = request.app.permissions
-#       while parts:
-#         perm = perm[parts[-1]]
-#         parts.pop()
-
-#       if not perm:
-#         raise PermissionException("{} doesn't exists".format(permission))
-
-#       if any(map(lambda role: role in perm, actor.roles)):
-#         return await func(*args, **kwargs)
-#       else:
-#         raise Unauthorized("Not enought privileges")
-
-#     return decorated
-#   return decorator
-
 def permission(permission = None, default = None, description = None):
   if default is None:
     default = []
@@ -141,26 +103,9 @@ def permission(permission = None, default = None, description = None):
 
       permRepo = await args[0].ancestors(request.app.models, check = lambda x: hasattr(x, "permissions") and x.permissions)
       perm = await permRepo.get_permission(func.__qualname__.split(".")[0], permission)
+      actor = await (yAuth()._actor(request))
 
-      can = False
-      if perm:
-        if perm.roles:
-          actor = await yAuth()._actor(request)
-          for rol in perm.roles:
-            if actor and (rol in actor.roles or "{}@{}".format(rol, args[0].get_url()) in actor.roles):
-              can = True
-              break
-            else:
-              checker = getattr(request.app.models.User, "is_{}".format(rol.lower()), None)
-              if checker:
-                check = await checker(actor, args[0], request) if iscoroutinefunction(checker) else checker(actor, args[0], request)
-                if check:
-                  can = True
-                  break
-        else:
-          can = True
-
-      if can:      
+      if await perm.can(actor, args[0], request):      
         return await func(*args, **kwargs)
       
       raise Unauthorized("Not enought privileges") 
