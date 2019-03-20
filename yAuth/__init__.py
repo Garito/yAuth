@@ -102,12 +102,14 @@ def permission(permission = None, default = None, description = None):
         permission = func.__decorators__["permission"]["name"]
 
       permRepo = await args[0].ancestors(request.app.models, check = lambda x: hasattr(x, "permissions") and x.permissions)
+      if isinstance(permRepo, list) and len(permRepo):
+        permRepo = permRepo[0]
       perm = await permRepo.get_permission(func.__qualname__.split(".")[0], permission)
       actor = await (yAuth()._actor(request))
 
       if await perm.can(actor, args[0], request):      
         return await func(*args, **kwargs)
-      
+
       raise Unauthorized("Not enought privileges") 
 
     return decorated
