@@ -75,13 +75,10 @@ def allowed(condition):
   return decorator
 
 def permission(permission = None, default = None, description = None):
-  if default is None:
-    default = []
-
   def decorator(func):
     if not hasattr(func, "__decorators__"):
       func.__decorators__ = {}
-    func.__decorators__["permission"] = {"name": permission, "default": default}
+    func.__decorators__["permission"] = {"name": permission, "default": default or []}
     if description is not None:
       func.__decorators__["permission"]["description"] = description
 
@@ -104,13 +101,14 @@ def permission(permission = None, default = None, description = None):
       permRepo = await args[0].ancestors(request.app.models, check = lambda x: hasattr(x, "permissions") and x.permissions)
       if isinstance(permRepo, list) and len(permRepo):
         permRepo = permRepo[0]
-      perm = await permRepo.get_permission(func.__qualname__.split(".")[0], permission)
+
+      perm = await permRepo.get_permission(args[0].__class__.__name__, permission)
       actor = await (yAuth()._actor(request))
 
-      if await perm.can(actor, args[0], request):      
+      if await perm.can(actor, args[0], request):
         return await func(*args, **kwargs)
 
-      raise Unauthorized("Not enought privileges") 
+      raise Unauthorized("Not enought privileges")
 
     return decorated
   return decorator
@@ -164,22 +162,23 @@ class yAuth():
   async def verify(self, request):
     pass
 
-  @notaroute
   @can_crash(Unauthorized, code = 401, renderer = lambda model: None)
   @produces("User", description = "")
   @consumes(AuthToken, from_ = "headers", getter = AuthToken.get_bearer)
+  @notaroute(when = ["main", "recursive"], description = "Use get_actor instead")
   async def _actor(self, request, model):
     payload = model.verify(request.app.config["JWT_SECRET"])
     if payload:
       model = request.app.models.User(request.app.table, exclude = ("password",))
       await model.get(_id = ObjectId(payload["user_id"]))
       return model
-    
+
     raise Unauthorized("No actor")
 
   @can_crash(Unauthorized, code = 401, description = "Returns Unauthorized if the token is invalid")
   @produces(OkDictResult, as_ = "result", description = "Returns the user data")
   @allowed(["user"])
   async def get_actor(self, request):
+    """Gets the actor"""
     actor = await self._actor(request)
     return actor.to_plain_dict()
