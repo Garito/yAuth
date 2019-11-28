@@ -115,6 +115,7 @@ def permission(permission = None, default = None, description = None):
 
 class AuthToken(Schema):
   access_token = fields.Str()
+  valid = fields.Int()
 
   @classmethod
   def get_bearer(cls, headers, key = "Authorization", prefix = "Bearer"):
@@ -123,6 +124,8 @@ class AuthToken(Schema):
   def generate(self, payload, secret, exp = 30, algo = "HS256"):
     if "exp" not in payload:
       payload["exp"] = datetime.utcnow() + timedelta(minutes = exp)
+
+    self.__data__["valid"] = exp
     self.__data__["access_token"] = jwt.encode(payload, secret, algo).decode()
 
   def verify(self, secret, algos = None):
@@ -161,6 +164,15 @@ class yAuth():
   @allowed(["user"])
   async def verify(self, request):
     pass
+
+  @can_crash(Unauthorized, code = 401, description = "Returns Unauthorized if can't renew the token")
+  @produces(AuthToken, description = "Returns a new access token & the numbers of minutes it will be valid")
+  @allowed(["user"])
+  async def renew_token(self, request):
+    actor = await self.get_actor(request)
+    token = AuthToken()
+    token.generate({"user_id": str(actor.result["_id"])}, request.app.config["JWT_SECRET"])
+    return token.to_plain_dict()
 
   @can_crash(Unauthorized, code = 401, renderer = lambda model: None)
   @produces("User", description = "")
